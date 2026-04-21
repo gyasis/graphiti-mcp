@@ -1,0 +1,103 @@
+# Graphiti MCP Server Configuration for LiteLLM with Azure OpenAI
+#
+# RECOMMENDED CONFIG for Azure OpenAI deployments.
+#
+# This config uses LiteLLM provider with OpenAIGenericClient which:
+# - Uses json_schema response_format for structured outputs
+# - Compatible with Azure OpenAI (avoids responses.parse() API issues)
+# - Requires API version 2024-12-01-preview for json_schema support
+#
+# Model format for Azure: "azure/<deployment_name>"
+
+server:
+  transport: "stdio"  # stdio for Claude Code integration
+
+llm:
+  provider: "litellm"
+  model: "azure/model-router"  # Azure deployment name prefixed with "azure/"
+  max_tokens: 16384  # Increased from 4096 to handle reasoning model token tax (gpt-5-nano uses ~576+ reasoning tokens before output)
+
+  providers:
+    litellm:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      base_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-12-01-preview}
+
+# Keep Azure embedder - it works fine (uses standard embeddings endpoint)
+embedder:
+  provider: "azure_openai"
+  model: "text-embedding-3-small"
+  dimensions: 1536
+
+  providers:
+    azure_openai:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      api_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-12-01-preview}
+      deployment_name: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}
+      use_azure_ad: false
+
+database:
+  provider: "falkordb"
+
+  providers:
+    falkordb:
+      uri: ${FALKORDB_URI:redis://localhost:6379}
+      password: ${FALKORDB_PASSWORD:}
+      database: ${FALKORDB_DATABASE:graphiti_memory}
+
+graphiti:
+  group_id: ${GRAPHITI_GROUP_ID:developer_gyasisutton}
+  episode_id_prefix: ${EPISODE_ID_PREFIX:}
+  user_id: ${USER_ID:gyasisutton}
+  entity_types:
+    # Developer-Specific Types (High Priority)
+    # PRIORITY ORDER: Extract in this order for best results
+    
+    - name: "Preference"
+      description: "User preferences, choices, opinions, or selections. PRIORITIZE THIS OVER ALL OTHER TYPES (except User/Assistant). Use LOW THRESHOLD - extract even subtle preferences. Trigger patterns: 'I want/like/prefer/choose X', 'I don't want/dislike/avoid Y', 'X is better/worse', 'rather have X than Y', 'no X please', 'skip X', 'go with X instead'. Examples: 'I prefer TypeScript over JavaScript', 'I always use functional components', 'I don't want to use Docker locally'. Relationships: Influences Workflow, ToolPattern, Solution choices. Overrides other entity types."
+    
+    - name: "Problem"
+      description: "An error, bug, issue, challenge, or obstacle that was encountered and solved. Includes error types, bug categories, problem classifications, failures, malfunctions, defects. Trigger patterns: 'Error', 'Bug', 'Issue', 'Problem', 'Failure', 'Exception', 'Crash', 'Malfunction', 'Defect', 'Challenge', 'Obstacle', 'Blocker', error messages, problem statements. Examples: 'TypeScript compilation error: Property x does not exist', 'Memory leak in React application', 'API connection timeout', 'Database query performance issue'. Relationships: Solved by Solution/Workflow, Addressed by ToolPattern/Procedure, Occurs in Context, Results in Outcome, Tracked by Metric. PRIORITY: HIGH - Problems are central to developer workflows."
+    
+    - name: "Solution"
+      description: "A fix, workaround, resolution, or approach that successfully addressed a problem. Includes code changes, configuration updates, procedural fixes, patches, corrections, remedies. Trigger patterns: 'Fix', 'Solution', 'Resolution', 'Workaround', 'Fixed by', 'Solved with', 'Resolved using', 'Add/Change/Update/Modify' (when fixing), 'Patch', 'Correction', 'Remedy'. Examples: 'Add type annotation: const x: string = ...', 'Add useEffect cleanup hook', 'Update API timeout configuration', 'Use retry logic with exponential backoff'. Relationships: Solves Problem, Part of Workflow, Uses ToolPattern (if tools involved), Results in Outcome, Measured by Metric, Applies to Context. PRIORITY: HIGH - Solutions are key outcomes."
+    
+    - name: "Workflow"
+      description: "A complete, reusable process template that solves a problem or accomplishes a goal. Workflows combine multiple Procedures and ToolPatterns into orchestrated sequences with conditional logic, dependencies, and decision points. WHEN TO USE: Complete end-to-end processes, multi-phase processes with orchestration, reusable process templates, workflows with conditional branches, complex processes combining multiple steps. WHEN NOT TO USE: Simple linear sequences (use Procedure), tool sequences only (use ToolPattern), single actions (use Solution). Trigger patterns: 'Complete workflow', 'Full process', 'End-to-end process', 'Multi-phase', 'Multi-step workflow', 'Orchestrated process', 'Workflow template', 'Reusable workflow', 'Process template', conditional logic ('If X then Y, else Z'), named workflows. Examples: 'New Project Setup Workflow: create repo → configure CI/CD → set up testing → deploy staging', 'Memory Leak Debugging Workflow with phases: investigation → analysis → solution → verification', 'API Integration Workflow: authenticate → retry on failure → handle errors → log results'. Relationships: Contains Procedures/ToolPatterns, Solves Problems, Applies to Context, Results in Outcome/Solution, Measured by Metric. PRIORITY: HIGH - Extract workflows before breaking into Procedures/ToolPatterns."
+    
+    - name: "ToolPattern"
+      description: "A successful sequence of tools, commands, or operations that solved a problem. Represents the specific order and combination of tools that proved effective. WHEN TO USE: Sequences of tools/commands that work together, tool usage patterns that solved a problem, command-line tool sequences, API call sequences, tool combinations forming a pattern. WHEN NOT TO USE: Complete workflows (use Workflow), single tool usage (use Tool entity if defined), general procedures without specific tools (use Procedure), tool configurations (use Solution/Preference). Trigger patterns: 'Tool sequence', 'Command sequence', 'Tool pattern', 'Using X → Y → Z', 'First run X, then Y, then Z', 'Tool chain', 'Tool combination', 'Tool workflow', specific tool names in sequence. Examples: 'codebase_search → read_file → search_replace' (for fixing code errors), 'docker build → docker tag → docker push' (for container deployment), 'git fetch → git merge → git push' (for version control). Relationships: Part of Workflow, Solves Problem, Uses Tool (if Tool entity exists), Results in Solution/Outcome, Measured by Metric, Applies to Context. PRIORITY: HIGH - Extract tool patterns when tools are mentioned in sequence."
+    
+    - name: "Outcome"
+      description: "The result, consequence, or effect of an action, solution, or workflow. Includes success/failure status, performance impact, and resolution state. WHEN TO USE: Success/failure results, performance impacts, resolution states, consequences of actions, results of workflows/solutions. WHEN NOT TO USE: Quantifiable measurements (use Metric), user preferences about outcomes (use Preference), procedures that lead to outcomes (use Procedure). Trigger patterns: 'Success', 'Failed', 'Succeeded', 'Result', 'Outcome', 'Consequence', 'Effect', 'Resolved', 'Fixed', 'Working', 'Broken', 'Performance improved/degraded', 'Partially resolved', 'Fully resolved'. Examples: 'Success - compilation passes', 'Failed - still experiencing memory leaks', 'Performance improved by 50%', 'Partially resolved - main issue fixed, edge case remains'. Relationships: Result of Solution/Workflow/ToolPattern/Procedure, Related to Problem (when solved), Measured by Metric (quantitative aspects). PRIORITY: HIGH - Outcomes are important for tracking effectiveness."
+    
+    - name: "Metric"
+      description: "Quantifiable measurements of effectiveness, performance, success rates, time savings, or other measurable outcomes. Always includes numbers or percentages. WHEN TO USE: Success rates, percentages, time measurements (saved/taken), performance improvements/degradations, usage counts, frequencies, any quantifiable measurement. WHEN NOT TO USE: Qualitative outcomes (use Outcome), success/failure status (use Outcome), general descriptions (use other types). Trigger patterns: Numbers with units ('5 minutes', '60%', '95% success rate'), percentages ('X% improvement', 'Y% reduction'), counts ('Used X times', 'Y retries needed'), measurements ('X seconds saved', 'Y MB memory reduction'), rates ('X% success rate', 'Y requests per minute'). Examples: '95% success rate', '5 minutes saved', '60% memory reduction', 'Used 47 times', '3 retries needed', 'Average time: 3 minutes'. Relationships: Measures Workflow/ToolPattern/Solution/Procedure, Quantifies Outcome, Tracks Problem (resolution metrics). PRIORITY: HIGH - Metrics enable data-driven decisions."
+    
+    - name: "Context"
+      description: "Project, environment, technology stack, or situational context where solutions or patterns apply. Describes the setting or environment. WHEN TO USE: Technology stacks ('React + TypeScript', 'Python 3.10+'), project types ('Web application', 'API service'), environments ('Production', 'Docker container', 'Local development'), frameworks/libraries ('Next.js project', 'Django application'), platform contexts ('AWS', 'Azure', 'Linux'). WHEN NOT TO USE: Physical locations (use Location), organizations (use Organization), user preferences about context (use Preference), general topics (use Topic). Trigger patterns: Technology mentions ('React project', 'Python application'), environment mentions ('Production', 'Docker', 'Local'), stack descriptions ('MERN stack', 'LAMP stack'), framework mentions ('Next.js', 'Django', 'Spring Boot'), platform mentions ('AWS', 'Azure', 'Kubernetes'). Examples: 'React + TypeScript + Vite project', 'Python 3.10+ environment', 'Docker container setup', 'Production environment', 'Next.js application', 'AWS Lambda function'. Relationships: Applies to Workflow/ToolPattern/Solution/Problem, Defines where solutions/patterns work. PRIORITY: MEDIUM - Important for context-aware retrieval."
+    
+    - name: "Procedure"
+      description: "Standard operating procedures and sequential instructions. Linear step-by-step processes. Often part of a larger Workflow. WHEN TO USE: Sequential instructions or steps, step-by-step processes, linear procedures, standard operating procedures, how-to instructions. WHEN NOT TO USE: Complete workflows with orchestration (use Workflow), tool sequences (use ToolPattern), single actions (use Solution or other types). Trigger patterns: 'Step 1, Step 2, Step 3', 'First do X, then do Y', 'Procedure:', 'Steps:', 'Instructions:', 'Always do X when Y happens', 'If X occurs, then do Y' (simple conditionals). Examples: 'Procedure: Check logs → Analyze stack → Profile → Fix', 'Steps: 1. Run tests 2. Build 3. Deploy', 'Always run linter before committing'. Relationships: Part of Workflow, Composed of ToolPattern (if tools involved), Solves Problem, Results in Solution/Outcome. PRIORITY: STANDARD - Extract procedures when steps are mentioned."
+    
+    - name: "Requirement"
+      description: "Specific needs, features, or functionality that must be fulfilled. Project requirements, feature specifications, or necessary conditions. WHEN TO USE: Project requirements, feature specifications, necessary conditions, 'Must have', 'Required', 'Needs', functional/non-functional requirements. WHEN NOT TO USE: User preferences (use Preference), problems (use Problem), solutions (use Solution). Trigger patterns: 'Requirement', 'Must have', 'Needs', 'Required', 'Feature', 'Specification', 'Must support', 'Should', 'Shall' (in requirement context). Examples: 'Must support TypeScript', 'Requirement: API must handle 1000 requests/second', 'Feature: User authentication'. Relationships: Satisfied by Solution/Workflow, Part of Project/Organization context. PRIORITY: STANDARD."
+    
+    - name: "Event"
+      description: "Time-bound activities, occurrences, or experiences. Things that happen at specific times or during specific periods. WHEN TO USE: Time-bound activities, occurrences, happenings, scheduled events, past/present/future events. WHEN NOT TO USE: Procedures (use Procedure), workflows (use Workflow), problems (use Problem). Trigger patterns: 'Event', 'Occurrence', 'Happened', 'Occurred', time references ('Yesterday', 'Last week', 'At 3pm'), scheduled ('Meeting', 'Deployment', 'Release'). Examples: 'Deployment event last Friday', 'Error occurred during deployment', 'Code review meeting'. Relationships: Related to Problem/Solution/Workflow, Occurs in Context/Location. PRIORITY: STANDARD."
+    
+    - name: "Location"
+      description: "Physical or virtual places where activities occur. IMPORTANT: Check if entity is User, Assistant, Preference, Organization, Document, Event first - use those instead if applicable. WHEN TO USE: Physical places (cities, buildings, rooms, addresses), virtual locations (websites, online platforms, repositories), file paths, directory locations, server locations, deployment locations. WHEN NOT TO USE: Project contexts (use Context), organizations (use Organization), user preferences about locations (use Preference). Trigger patterns: Physical ('In building X', 'At location Y'), virtual ('Repository at', 'Deployed to', 'Located in'), paths ('/path/to/file', 'src/components'). Examples: 'Repository: github.com/user/repo', 'Deployed to: AWS us-east-1', 'File location: src/components/Button.tsx'. Relationships: Contains Events/Problems/Solutions, Context for Workflows/Procedures. PRIORITY: STANDARD."
+    
+    - name: "Organization"
+      description: "Companies, institutions, groups, or formal entities. Teams, companies, institutions, or organized groups. WHEN TO USE: Company names, team names, institutions, formal groups. WHEN NOT TO USE: Project contexts (use Context), user preferences (use Preference). Trigger patterns: Company names, team names, 'Organization', 'Company', 'Team', institutional names. Examples: 'Acme Corporation', 'Engineering Team', 'Open Source Project'. Relationships: Owns Projects/Problems/Solutions, Context for Workflows. PRIORITY: STANDARD."
+    
+    - name: "Document"
+      description: "Information content in various forms. Books, articles, reports, documentation, or any informational content. WHEN TO USE: Documentation, articles, reports, books, guides, tutorials, written content, reference materials. WHEN NOT TO USE: Code files (use Object or Context), solutions (use Solution). Trigger patterns: 'Document', 'Article', 'Report', 'Guide', 'Documentation', 'Tutorial', 'Manual', document titles. Examples: 'TypeScript Handbook', 'API Documentation', 'Setup Guide'. Relationships: Describes Problems/Solutions/Workflows, References Procedures/ToolPatterns. PRIORITY: STANDARD."
+    
+    - name: "Topic"
+      description: "Subject of conversation, interest, or knowledge domain. USE AS LAST RESORT ONLY. Check if entity fits User, Assistant, Preference, Organization, Document, Event, Location first. WHEN TO USE: Only when entity doesn't fit any other type, general subjects or themes, knowledge domains. WHEN NOT TO USE: If entity fits any other type - use that type instead. Trigger patterns: General subjects ('TypeScript', 'React', 'Programming'), knowledge domains ('Web development', 'Data science'). Examples: 'TypeScript' (if not a tool, context, or solution), 'Web development' (general topic). Relationships: General categorization. PRIORITY: FALLBACK - Use only when no other type fits."
+    
+    - name: "Object"
+      description: "Physical items, tools, devices, or possessions. USE AS LAST RESORT ONLY. Check if entity fits User, Assistant, Preference, Organization, Document, Event, Location, Topic first. WHEN TO USE: Only when entity doesn't fit any other type, physical items/tools/devices, possessions. WHEN NOT TO USE: Tools in sequences (use ToolPattern), if entity fits any other type - use that type instead. Trigger patterns: Physical items ('Computer', 'Server', 'Device'), tools ('Editor', 'IDE' if not part of pattern). Examples: 'MacBook Pro' (physical device), 'VS Code' (if not part of tool pattern). Relationships: Used in Workflows/Procedures. PRIORITY: FALLBACK - Use only when no other type fits."

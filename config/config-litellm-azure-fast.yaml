@@ -1,0 +1,76 @@
+# Graphiti MCP Server Configuration - FAST (Optimized for Performance)
+#
+# This is the FASTEST configuration with minimal entity types for optimal performance.
+# Expected processing time: 2-4 minutes per episode (vs 10-15 minutes with full config)
+#
+# PERFORMANCE OPTIMIZATIONS:
+# - Only 5 core entity types (vs 14 in standard config)
+# - Simplified descriptions (20-50 words vs 100-400 words)
+# - 50-70% faster entity extraction
+# - Reduced LLM prompt size
+#
+# USE THIS CONFIG FOR:
+# - Maximum speed
+# - Core developer workflows (problems, solutions, tools)
+# - When you need fast memory storage
+#
+# Model format for Azure: "azure/<deployment_name>"
+
+server:
+  transport: "stdio"  # stdio for Claude Code integration
+
+llm:
+  provider: "litellm"
+  model: "azure/model-router"  # Azure deployment name prefixed with "azure/"
+  max_tokens: 4096
+
+  providers:
+    litellm:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      base_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-12-01-preview}
+
+embedder:
+  provider: "azure_openai"
+  model: "text-embedding-3-small"
+  dimensions: 1536
+
+  providers:
+    azure_openai:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      api_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-12-01-preview}
+      deployment_name: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}
+      use_azure_ad: false
+
+database:
+  provider: "falkordb"
+
+  providers:
+    falkordb:
+      uri: ${FALKORDB_URI:redis://localhost:6379}
+      password: ${FALKORDB_PASSWORD:}
+      database: ${FALKORDB_DATABASE:graphiti_memory}
+
+graphiti:
+  group_id: ${GRAPHITI_GROUP_ID:developer_gyasisutton}
+  episode_id_prefix: ${EPISODE_ID_PREFIX:}
+  user_id: ${USER_ID:gyasisutton}
+
+  # FAST CONFIG: 5 Core Entity Types
+  # Optimized descriptions for speed (20-50 words vs 100-400 words)
+  entity_types:
+    - name: "Preference"
+      description: "User preferences, choices, opinions. Trigger: 'I want/like/prefer', 'I don't want/dislike'. Examples: 'I prefer TypeScript', 'I always use functional components'. PRIORITY: Extract even subtle preferences."
+
+    - name: "Problem"
+      description: "Errors, bugs, issues, obstacles. Trigger: Error messages, 'Bug', 'Issue', 'Problem', 'Failure'. Examples: 'TypeScript compilation error', 'Memory leak', 'API timeout'. Solved by Solutions/Workflows."
+
+    - name: "Solution"
+      description: "Fixes, workarounds, resolutions. Trigger: 'Fix', 'Solution', 'Resolved using', 'Add/Update/Modify'. Examples: 'Add type annotation', 'Add cleanup hook', 'Use retry logic'. Solves Problems."
+
+    - name: "Workflow"
+      description: "Multi-step processes, complete workflows. Trigger: 'Complete workflow', 'Multi-phase', 'End-to-end', conditional logic. Examples: 'Debugging workflow: check logs → analyze → fix → verify', 'Deployment process'. Contains ToolPatterns."
+
+    - name: "ToolPattern"
+      description: "Successful tool sequences, command chains. Trigger: Tool names in sequence, 'Tool pattern', 'Using X → Y → Z'. Examples: 'search → read → edit', 'docker build → tag → push'. Part of Workflows."

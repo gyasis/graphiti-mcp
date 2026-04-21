@@ -1,0 +1,237 @@
+name: Regression Tests - Driver Cloning
+
+on:
+  push:
+    branches: [ main, develop, azure-openai-falkordb ]
+    paths:
+      - 'src/graphiti_mcp_server.py'
+      - 'tests/test_driver_cloning_regressions.py'
+      - '.github/workflows/test-regressions.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/graphiti_mcp_server.py'
+      - 'tests/test_driver_cloning_regressions.py'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  regression-tests:
+    name: Regression Tests (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false  # Continue testing other databases even if one fails
+      matrix:
+        database: [falkordb, neo4j]
+        python-version: ['3.10', '3.11', '3.12']
+
+    services:
+      # FalkorDB service
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      # Neo4j service
+      neo4j:
+        image: neo4j:5.26
+        ports:
+          - 7687:7687
+          - 7474:7474
+        env:
+          NEO4J_AUTH: neo4j/graphiti
+          NEO4J_PLUGINS: '["apoc"]'
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p graphiti 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+
+      - name: Wait for database services
+        run: |
+          # Wait for FalkorDB
+          echo "Waiting for FalkorDB..."
+          timeout 30 bash -c 'until docker exec $(docker ps -q -f ancestor=falkordb/falkordb:latest) redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done'
+
+          # Wait for Neo4j
+          if [ "${{ matrix.database }}" = "neo4j" ]; then
+            echo "Waiting for Neo4j..."
+            timeout 60 bash -c 'until curl -s http://localhost:7474 > /dev/null; do sleep 2; done'
+          fi
+
+      - name: Run regression tests (unit)
+        run: |
+          uv run pytest tests/test_driver_cloning_regressions.py \
+            -v \
+            --tb=short \
+            --maxfail=5 \
+            -m "not slow" \
+            --junitxml=test-results/junit-${{ matrix.database }}-${{ matrix.python-version }}.xml
+
+      - name: Run regression tests (performance)
+        if: matrix.python-version == '3.11' && matrix.database == 'falkordb'
+        run: |
+          uv run pytest tests/test_driver_cloning_regressions.py \
+            -v \
+            --tb=short \
+            -m "slow" \
+            --junitxml=test-results/junit-performance.xml
+
+      - name: Generate coverage report
+        if: matrix.python-version == '3.11' && matrix.database == 'falkordb'
+        run: |
+          uv run pytest tests/test_driver_cloning_regressions.py \
+            --cov=src.graphiti_mcp_server \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --cov-report=term-missing \
+            -v
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11' && matrix.database == 'falkordb'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: regressions
+          name: regression-coverage
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.database }}-${{ matrix.python-version }}
+          path: test-results/
+          retention-days: 30
+
+      - name: Upload coverage HTML
+        if: matrix.python-version == '3.11' && matrix.database == 'falkordb'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "### Regression Test Results :test_tube:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Database:** ${{ matrix.database }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Python:** ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f test-results/junit-${{ matrix.database }}-${{ matrix.python-version }}.xml ]; then
+            echo "**Tests:** $(grep -o 'tests="[0-9]*"' test-results/junit-${{ matrix.database }}-${{ matrix.python-version }}.xml | grep -o '[0-9]*')" >> $GITHUB_STEP_SUMMARY
+            echo "**Failures:** $(grep -o 'failures="[0-9]*"' test-results/junit-${{ matrix.database }}-${{ matrix.python-version }}.xml | grep -o '[0-9]*')" >> $GITHUB_STEP_SUMMARY
+            echo "**Errors:** $(grep -o 'errors="[0-9]*"' test-results/junit-${{ matrix.database }}-${{ matrix.python-version }}.xml | grep -o '[0-9]*')" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  regression-analysis:
+    name: Regression Analysis
+    runs-on: ubuntu-latest
+    needs: regression-tests
+    if: always()
+
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-test-results/
+          pattern: test-results-*
+
+      - name: Analyze regression patterns
+        run: |
+          echo "## Regression Test Analysis :mag:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Bug Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 1: Driver state isolation in add_memory" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 2: get_status using execute_query" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 3: UUID methods use cloned drivers" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 4: graph_verifier Cypher syntax" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 5: Validation functions" >> $GITHUB_STEP_SUMMARY
+          echo "- BUG 9: Multi-group operations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All regression tests validate critical driver cloning patterns." >> $GITHUB_STEP_SUMMARY
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+
+      - name: Run ruff (linting)
+        run: |
+          uv run ruff check tests/test_driver_cloning_regressions.py
+
+      - name: Run ruff (formatting)
+        run: |
+          uv run ruff format --check tests/test_driver_cloning_regressions.py
+
+      - name: Run pyright (type checking)
+        run: |
+          uv run pyright tests/test_driver_cloning_regressions.py
+
+      - name: Check test documentation
+        run: |
+          if [ ! -f tests/TEST_REGRESSIONS.md ]; then
+            echo "ERROR: TEST_REGRESSIONS.md not found"
+            exit 1
+          fi
+          echo "✓ Test documentation exists"
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Bandit security scan
+        uses: PyCQA/bandit-action@v1
+        with:
+          path: tests/test_driver_cloning_regressions.py
+          level: medium
+          confidence: medium

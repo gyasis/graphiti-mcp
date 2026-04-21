@@ -1,0 +1,57 @@
+# Graphiti MCP Server Configuration for Azure OpenAI with FalkorDB
+
+server:
+  transport: "stdio"  # stdio for Claude Code integration
+
+llm:
+  provider: "azure_openai"
+  model: "model-router"
+  max_tokens: 4096
+
+  providers:
+    azure_openai:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      api_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-05-01-preview}
+      deployment_name: ${AZURE_OPENAI_DEPLOYMENT}
+      use_azure_ad: false
+
+embedder:
+  provider: "azure_openai"
+  model: "text-embedding-3-small"
+  dimensions: 1536
+
+  providers:
+    azure_openai:
+      api_key: ${AZURE_OPENAI_API_KEY}
+      api_url: ${AZURE_OPENAI_ENDPOINT}
+      api_version: ${AZURE_OPENAI_API_VERSION:2024-05-01-preview}
+      deployment_name: ${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}
+      use_azure_ad: false
+
+database:
+  provider: "falkordb"
+
+  providers:
+    falkordb:
+      uri: ${FALKORDB_URI:redis://localhost:6379}
+      password: ${FALKORDB_PASSWORD:}
+      database: ${FALKORDB_DATABASE:graphiti_memory}
+
+graphiti:
+  group_id: ${GRAPHITI_GROUP_ID:developer_gyasisutton}
+  episode_id_prefix: ${EPISODE_ID_PREFIX:}
+  user_id: ${USER_ID:gyasisutton}
+  entity_types:
+    - name: "ToolPattern"
+      description: "A successful tool usage pattern or workflow that solved a problem"
+    - name: "Problem"
+      description: "An error, bug, or issue that was encountered and solved"
+    - name: "Solution"
+      description: "A fix, workaround, or resolution to a problem"
+    - name: "Preference"
+      description: "User preferences, choices, opinions, or selections"
+    - name: "Requirement"
+      description: "Specific needs, features, or functionality that must be fulfilled"
+    - name: "Procedure"
+      description: "Standard operating procedures and sequential instructions"

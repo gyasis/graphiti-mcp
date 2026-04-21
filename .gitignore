@@ -1,0 +1,24 @@
+# Environment
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# uv
+.uv/
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+deep_research.db
+.memory/
+.specstory/
+*.db
