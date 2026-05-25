@@ -256,6 +256,51 @@ except Exception as e:
         f'Entity extraction/dedup may crash on unknown entity types.'
     )
 
+# --------------------------------------------------------------------------- #
+# TARGETED FIX: multi-label node search breaks Cypher on FalkorDB              #
+#                                                                              #
+# graphiti_core.search.search_filters.node_search_filter_query_constructor     #
+# emits a `n:A|B` label-disjunction for EVERY non-KUZU provider (line ~100).   #
+# That syntax is Neo4j-5 only; FalkorDB cannot parse `n:A|B` in a WHERE clause #
+# — so search_nodes(entity_types=["X","Y"]) raises a Cypher syntax error.     #
+# ONE label (`n:X`) works; TWO+ break. (Matches the long-standing             #
+# "query one entity_type at a time" workaround.)                              #
+#                                                                              #
+# Fix: rebuild a 2+ label filter as a parenthesized OR of native predicates    #
+#   (n:A OR n:B)  — valid on FalkorDB AND Neo4j, and a true union of types.    #
+# search_utils.py imports the constructor BY NAME, so we must patch the        #
+# reference held there (that's the one search_nodes actually calls).           #
+# Labels pass SAFE_CYPHER_IDENTIFIER_PATTERN, so interpolation is injection-safe. #
+# --------------------------------------------------------------------------- #
+try:
+    import graphiti_core.search.search_filters as _sf
+    import graphiti_core.search.search_utils as _su
+    from graphiti_core.driver.driver import GraphProvider as _GP
+    from graphiti_core.helpers import validate_node_labels as _vnl
+
+    _orig_node_filter_ctor = _sf.node_search_filter_query_constructor
+
+    def _safe_node_search_filter_query_constructor(filters, provider):
+        fq, fp = _orig_node_filter_ctor(filters, provider)
+        labels = getattr(filters, 'node_labels', None)
+        if labels and len(labels) > 1 and provider != _GP.KUZU:
+            _vnl(labels)  # re-validate: SAFE_CYPHER_IDENTIFIER_PATTERN → safe to interpolate
+            grouped = '(' + ' OR '.join(f'n:{lbl}' for lbl in labels) + ')'
+            fq = [grouped if (q.startswith('n:') and '|' in q) else q for q in fq]
+        return fq, fp
+
+    _sf.node_search_filter_query_constructor = _safe_node_search_filter_query_constructor
+    _su.node_search_filter_query_constructor = _safe_node_search_filter_query_constructor
+    logging.getLogger(__name__).info(
+        'Patched node_search_filter_query_constructor: 2+ entity_types now emit '
+        '(n:A OR n:B) for FalkorDB — search_nodes multi-type no longer breaks Cypher'
+    )
+except Exception as e:
+    logging.getLogger(__name__).warning(
+        f'Could not patch multi-label node search fix: {e}. '
+        f'search_nodes with 2+ entity_types may raise a Cypher syntax error on FalkorDB.'
+    )
+
 
 # Configure structured logging with timestamps
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
