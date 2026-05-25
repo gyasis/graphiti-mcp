@@ -291,9 +291,31 @@ try:
 
     _sf.node_search_filter_query_constructor = _safe_node_search_filter_query_constructor
     _su.node_search_filter_query_constructor = _safe_node_search_filter_query_constructor
+
+    # Edge twin of the same bug: edge_search_filter_query_constructor emits
+    # 'n:A|B AND m:A|B' for non-KUZU providers (hit by search_memory_facts when
+    # node_labels has 2+ entries). Rebuild as '(n:A OR n:B) AND (m:A OR m:B)'.
+    _orig_edge_filter_ctor = _sf.edge_search_filter_query_constructor
+
+    def _safe_edge_search_filter_query_constructor(filters, provider):
+        fq, fp = _orig_edge_filter_ctor(filters, provider)
+        labels = getattr(filters, 'node_labels', None)
+        if labels and len(labels) > 1 and provider != _GP.KUZU:
+            _vnl(labels)
+            broken = 'n:' + '|'.join(labels) + ' AND m:' + '|'.join(labels)
+            grouped = (
+                '(' + ' OR '.join(f'n:{lbl}' for lbl in labels) + ') AND ('
+                + ' OR '.join(f'm:{lbl}' for lbl in labels) + ')'
+            )
+            fq = [grouped if q == broken else q for q in fq]
+        return fq, fp
+
+    _sf.edge_search_filter_query_constructor = _safe_edge_search_filter_query_constructor
+    _su.edge_search_filter_query_constructor = _safe_edge_search_filter_query_constructor
+
     logging.getLogger(__name__).info(
-        'Patched node_search_filter_query_constructor: 2+ entity_types now emit '
-        '(n:A OR n:B) for FalkorDB — search_nodes multi-type no longer breaks Cypher'
+        'Patched node + edge search_filter constructors: 2+ entity_types/node_labels '
+        'now emit (n:A OR n:B) for FalkorDB — multi-type search no longer breaks Cypher'
     )
 except Exception as e:
     logging.getLogger(__name__).warning(
