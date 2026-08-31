@@ -1465,8 +1465,6 @@ async def get_episodes(
         )
 
         # Get episodes from the driver directly
-        from graphiti_core.nodes import EpisodicNode
-
         if not effective_group_ids:
             # If no group IDs, return empty list
             return EpisodeSearchResponse(message='No episodes found', episodes=[])
@@ -1491,52 +1489,58 @@ async def get_episodes(
             # Clone driver to query the specific database for this group
             driver = client.driver.clone(database=group_id)
             try:
-                if since_dt or until_dt:
-                    # OPTIMIZED PATH: Push date filter into Cypher query
-                    # FalkorDB stores created_at as ISO strings — lexicographic comparison works
-                    since_iso = since_dt.isoformat() if since_dt else None
-                    until_iso = until_dt.isoformat() if until_dt else None
+                # ONE PATH, ALWAYS ORDERED BY created_at.
+                #
+                # Do NOT reintroduce an "undated" branch delegating to
+                # EpisodicNode.get_by_group_ids(): that library query is
+                # `ORDER BY uuid DESC` + `LIMIT $limit`. UUIDs are random, so it
+                # returns a RANDOM sample of N episodes, which the Python sort
+                # below then arranges by created_at — producing a listing that
+                # LOOKS chronological while silently omitting recent episodes.
+                # Observed 2026-08-31: a default get_episodes() call skipped two
+                # episodes written five hours earlier and showed an older one.
+                # The date filter is optional; the ordering is not.
+                #
+                # FalkorDB stores created_at as ISO strings — lexicographic
+                # comparison works, so the range filter pushes into Cypher.
+                since_iso = since_dt.isoformat() if since_dt else None
+                until_iso = until_dt.isoformat() if until_dt else None
 
-                    # Build WHERE clauses dynamically
-                    where_clauses = ['e.group_id IN $group_ids']
-                    if since_iso:
-                        where_clauses.append('e.created_at >= $since_iso')
-                    if until_iso:
-                        where_clauses.append('e.created_at < $until_iso')
-                    where_str = ' AND '.join(where_clauses)
+                # Build WHERE clauses dynamically
+                where_clauses = ['e.group_id IN $group_ids']
+                if since_iso:
+                    where_clauses.append('e.created_at >= $since_iso')
+                if until_iso:
+                    where_clauses.append('e.created_at < $until_iso')
+                where_str = ' AND '.join(where_clauses)
 
-                    limit_clause = f'LIMIT {int(max_episodes)}' if max_episodes else ''
+                limit_clause = f'LIMIT {int(max_episodes)}' if max_episodes else ''
 
-                    query = f"""
-                        MATCH (e:Episodic)
-                        WHERE {where_str}
-                        RETURN DISTINCT
-                            e.uuid AS uuid,
-                            e.name AS name,
-                            e.group_id AS group_id,
-                            e.created_at AS created_at,
-                            e.source AS source,
-                            e.source_description AS source_description,
-                            e.content AS content,
-                            e.valid_at AS valid_at,
-                            e.entity_edges AS entity_edges
-                        ORDER BY e.created_at DESC
-                        {limit_clause}
-                    """
+                query = f"""
+                    MATCH (e:Episodic)
+                    WHERE {where_str}
+                    RETURN DISTINCT
+                        e.uuid AS uuid,
+                        e.name AS name,
+                        e.group_id AS group_id,
+                        e.created_at AS created_at,
+                        e.source AS source,
+                        e.source_description AS source_description,
+                        e.content AS content,
+                        e.valid_at AS valid_at,
+                        e.entity_edges AS entity_edges
+                    ORDER BY e.created_at DESC
+                    {limit_clause}
+                """
 
-                    records, _, _ = await driver.execute_query(
-                        query,
-                        group_ids=[group_id],
-                        since_iso=since_iso,
-                        until_iso=until_iso,
-                        routing_='r',
-                    )
-                    group_episodes = [get_episodic_node_from_record(r) for r in records]
-                else:
-                    # STANDARD PATH: No date filter, use library method
-                    group_episodes = await EpisodicNode.get_by_group_ids(
-                        driver, [group_id], limit=max_episodes
-                    )
+                records, _, _ = await driver.execute_query(
+                    query,
+                    group_ids=[group_id],
+                    since_iso=since_iso,
+                    until_iso=until_iso,
+                    routing_='r',
+                )
+                group_episodes = [get_episodic_node_from_record(r) for r in records]
                 all_episodes.extend(group_episodes)
             except Exception as e:
                 logger.warning(f'Error retrieving episodes for group {group_id}: {str(e)}')
