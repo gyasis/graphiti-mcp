@@ -1,25 +1,29 @@
 version: '3.8'
 
+# PATCHED 2026-07-02: fixes the FalkorDB startup memory balloon (issue #978).
+# Old image was 4.12.4 (Aug 2025) with default NODE_CREATION_BUFFER=16384, which
+# pre-allocated matrices to ~30GB on startup for a ~6MB graph. Fix = new image +
+# NODE_CREATION_BUFFER 1024 + hard memory caps. Graph backup before patch:
+#   ./data-backup-20260702-044802/varlib-falkordb-data/dump.rdb
 services:
   falkordb:
-    image: falkordb/falkordb:latest
-    container_name: falkordb-graphiti
-    restart: always
+    image: falkordb/falkordb@sha256:2496643cabd67e87fd82458383400c049324daec1fe674ba0db4c5bdaca5d25f  # FalkorDB 4.18.11 (2026-06-24), pinned by digest; was :latest -> stale 4.12.4
+    container_name: falkordb          # matches the running container; renaming it would start a SECOND, EMPTY graph
+    restart: unless-stopped                 # was: always
+    mem_limit: 6g                           # container-level backstop (under the 30G slice)
     ports:
-      - "6379:6379"
+      # R-PORT1: 7603 is this host's registered FalkorDB port. NOT 6379 (banned
+      # common port) and NOT 6380 -- it sits on 6379's doorstep and was never
+      # what actually ran. FALKORDB_URI in .env points at 7603; a mismatch here
+      # silently starts a second, EMPTY graph beside the real one.
+      - "7603:6379"
     volumes:
-      - falkordb_data:/data
-    command:
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - "everysec"
-      - --save
-      - "300"
-      - "10"
-      - --save
-      - "60"
-      - "1000"
+      - falkordb_data:/var/lib/falkordb/data
+    environment:
+      # THE fix: shrink the matrix pre-allocation buffer (default 16384 -> balloon)
+      FALKORDB_ARGS: "NODE_CREATION_BUFFER 1024 CACHE_SIZE 25"
+      # Persist RDB to the mounted volume (explicit --dir), hard Redis memory cap
+      REDIS_ARGS: "--dir /var/lib/falkordb/data --dbfilename dump.rdb --appendonly no --save 60 100 --save 300 10 --maxmemory 4gb --maxmemory-policy noeviction"
     healthcheck:
       test: ["CMD", "redis-cli", "PING"]
       interval: 10s

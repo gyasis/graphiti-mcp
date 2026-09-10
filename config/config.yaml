@@ -7,8 +7,12 @@
 
 server:
   transport: "http"  # Options: stdio, sse (deprecated), http
-  host: "0.0.0.0"
-  port: 8000
+  # R-PORT1/R-PORT3: upstream shipped 0.0.0.0:8000 -- 8000 is a BANNED common port
+  # and 0.0.0.0 exposes this server (and the API keys behind it) to the LAN.
+  # 7604 is claimed in the WSL2 block of the port registry. main.py has no
+  # argparse, so --host/--port are IGNORED; these values are the only lever.
+  host: "127.0.0.1"
+  port: 7604
   
 llm:
   provider: "openai"  # Options: openai, azure_openai, anthropic, gemini, groq
@@ -97,6 +101,20 @@ graphiti:
       description: "Specific needs, features, or functionality that must be fulfilled"
     - name: "Procedure"
       description: "Standard operating procedures and sequential instructions"
+    - name: "Workflow"
+      description: "A reusable multi-step process or pipeline the agent can replay (PRIORITIZE over Topic/Document/Procedure when the content describes a repeatable sequence of work)"
+    - name: "ToolPattern"
+      description: "A reusable tool, command, query, or code invocation pattern -- the concrete HOW of an operation (PRIORITIZE over Topic/Object)"
+    - name: "Recipe"
+      description: "A proven, named fix-or-build pattern kept as a durable playbook, usually pointing at a detail file (PRIORITIZE over Document/Topic; the pointed-at file is a Document, the pattern itself is the Recipe)"
+    - name: "AntiPattern"
+      description: "A known-BAD approach, trap, or thing NOT to do, and why it fails -- the negative-space counterpart of a Recipe (PRIORITIZE over Problem when the content warns against an approach rather than reporting an incident)"
+    - name: "Problem"
+      description: "A known issue, risk, bug, or failure that occurred (PRIORITIZE over Topic; use AntiPattern instead when warning against an approach)"
+    - name: "Solution"
+      description: "A fix, resolution, or workaround that resolved a Problem (PRIORITIZE over Topic/Document)"
+    - name: "Finding"
+      description: "A durable discovered fact -- a recurring ID, endpoint, credential location, measured number, or environment truth (PRIORITIZE over Object/Topic)"
     - name: "Location"
       description: "Physical or virtual places where activities occur"
     - name: "Event"
