@@ -1,5 +1,13 @@
 # Environment
 .env
+# .gitignore only covered `.env`, so timestamped backups of it -- which carry the
+# SAME API keys -- were untracked-but-committable. One `git add -A` would have
+# published them.
+.env.bak*
+.env.*.bak
+
+# Local graph dumps taken before risky migrations. Large, and they are data, not source.
+data-backup-*/
 .venv/
 venv/
 __pycache__/
