@@ -796,6 +796,14 @@ async def add_memory(
 ) -> SuccessResponse | ErrorResponse:
     """Add an episode to memory. This is the PRIMARY tool for storing information in the knowledge graph.
 
+    *** HARD LIMIT: episode_body MUST be <= 400 characters (~100 tokens). ***
+    Graphiti is an INDEX, not a content store. An episode is ONE pointer: a signal word, the
+    one fact or the one path, and "Source: YYYY-MM-DD." If it needs more, the detail belongs in
+    a file and this body points at that file. Measured 2026-10-30: only 18 of 95 episodes met
+    this, and the worst was 3,557 characters -- an essay nobody can use as an index entry.
+    Do not count "lines" or "sentences": count CHARACTERS. Graphiti strips punctuation on
+    write, so a sentence count cannot be audited afterwards and silently drifts.
+
     WHEN TO USE:
     - Store successful problem-solving workflows and tool patterns
     - Save user preferences, requirements, or procedures
@@ -844,7 +852,7 @@ async def add_memory(
 
     BEST PRACTICES:
     - ALWAYS prefix episode_body with a signal word when the type fits (see table above)
-    - Keep episode_body to 2-3 lines max — Graphiti is an INDEX, not a content store
+    - Keep episode_body <= 400 CHARACTERS (~100 tokens) — Graphiti is an INDEX, not a content store
     - End with "Source: YYYY-MM-DD." so the date can be used to find full details in SpecStory
     - Use descriptive names that summarize the episode content
     - Generic Entity is fine for pure reference data (facts, counts, schema info)
@@ -856,7 +864,7 @@ async def add_memory(
         ctx (Context): FastMCP context for progress notifications (injected automatically)
         name (str): Descriptive name summarizing the episode content (e.g., "ToolPattern: RAF pipeline interaction factors")
         episode_body (str): The content to persist. MUST start with a signal word prefix for typed entities.
-                          Keep to 2-3 lines. End with "Source: YYYY-MM-DD." for traceability.
+                          <= 400 characters. End with "Source: YYYY-MM-DD." for traceability.
                           When source='json', must be properly escaped JSON string.
         group_id (str, optional): Namespace for the graph. Defaults to configured group_id.
         source (str, optional): Source type - 'text' (default), 'json', or 'message'
