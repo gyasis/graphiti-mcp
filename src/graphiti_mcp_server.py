@@ -190,6 +190,87 @@ except Exception as e:
 #       0.28.2 refactored these (removed reflexion loop, changed to           #
 #       duplicate_name). Only the __doc__ bug remains unfixed upstream.        #
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# TARGETED FIX: label disjunction in a WHERE clause (graphiti-core 0.28.2)     #
+#                                                                              #
+# search_filters.py builds the node-label filter as `'|'.join(labels)`:        #
+#   1 label   -> "n:Recipe"                      valid                         #
+#   2+ labels -> "n:Recipe|Workflow"             INVALID inside WHERE          #
+#   [] labels -> "n:"                            INVALID, degenerate           #
+#                                                                              #
+# A label disjunction is only legal in MATCH, not in WHERE, so every           #
+# search_nodes call passing 2+ entity_types silently returned wrong results    #
+# instead of the requested types. Found 2026-05-24 and recorded in PRD         #
+# graphiti_audit_and_voice_threads_2026-05-24 (Thread A); it sat parked for    #
+# 159 days, so the memory-router's own "entity_types=[Recipe, Workflow]"       #
+# directive was broken for that whole period.                                  #
+#                                                                              #
+# Fix: wrap the two constructors and rewrite their output -- "x:A|B" becomes   #
+# "(x:A OR x:B)", and a degenerate bare "x:" filter is dropped. Wrapping (not  #
+# reimplementing) keeps every other filter identical to upstream. Patched on   #
+# the CONSUMING module, because search_ops name-imports the constructors and   #
+# so holds its own reference.                                                   #
+# --------------------------------------------------------------------------- #
+try:
+    import importlib as _il
+    import re as _re
+    import sys as _sys
+
+    _LABEL_OR = _re.compile(r'\b([nm]):([A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)+)\b')
+    _DEGENERATE = _re.compile(r'^[nm]:(\s+AND\s+[nm]:)*$')
+
+    def _expand_label_disjunction(q: str) -> str:
+        return _LABEL_OR.sub(
+            lambda m: '(' + ' OR '.join(f'{m.group(1)}:{lb}' for lb in m.group(2).split('|')) + ')',
+            q,
+        )
+
+    def _wrap_label_filter(orig):
+        if getattr(orig, '_label_disjunction_patched', False):
+            return orig
+
+        def wrapper(filters, provider):
+            queries, params = orig(filters, provider)
+            if getattr(filters, 'node_labels', None) == []:
+                queries = [q for q in queries if not _DEGENERATE.match(q)]
+            return [_expand_label_disjunction(q) for q in queries], params
+
+        wrapper.__name__ = getattr(orig, '__name__', 'wrapped')
+        wrapper.__doc__ = 'Patched: label disjunction made valid inside a WHERE clause.'
+        wrapper._label_disjunction_patched = True
+        return wrapper
+
+    # EVERY module that name-imports the constructors keeps its own reference, so each
+    # one has to be patched. Missing one leaves that backend silently broken: the first
+    # version of this patch covered only falkordb, which left neo4j, kuzu, neptune AND
+    # search_utils (the non-driver path) unfixed.
+    _TARGETS = (
+        'graphiti_core.search.search_utils',
+        'graphiti_core.driver.falkordb.operations.search_ops',
+        'graphiti_core.driver.neo4j.operations.search_ops',
+        'graphiti_core.driver.kuzu.operations.search_ops',
+        'graphiti_core.driver.neptune.operations.search_ops',
+    )
+    _patched = []
+    for _name in _TARGETS:
+        try:
+            _m = _il.import_module(_name)
+        except Exception:
+            continue  # a backend whose optional deps are absent
+        for _fn in ('node_search_filter_query_constructor', 'edge_search_filter_query_constructor'):
+            _orig = getattr(_m, _fn, None)
+            if _orig is not None:
+                setattr(_m, _fn, _wrap_label_filter(_orig))
+                _patched.append(f'{_name.rsplit(".", 2)[-2]}.{_fn[:4]}')
+    # NB: this block runs long before `logger` is defined (line ~435), so it must not
+    # use it -- and the except handler must not either, or the guard re-raises.
+    print(f'[graphiti-mcp] patched label disjunction in {len(_patched)} site(s): '
+          f'{", ".join(_patched)}', file=_sys.stderr)
+except Exception as _e:  # never let the patch break startup
+    import sys as _sys2
+    print(f'[graphiti-mcp] could not patch label disjunction: {_e}', file=_sys2.stderr)
+
+
 try:
     import graphiti_core.utils.maintenance.node_operations as _node_ops
 
