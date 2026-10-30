@@ -214,6 +214,7 @@ except Exception as e:
 try:
     import importlib as _il
     import re as _re
+    import sys as _sys
 
     _LABEL_OR = _re.compile(r'\b([nm]):([A-Za-z_][A-Za-z0-9_]*(?:\|[A-Za-z_][A-Za-z0-9_]*)+)\b')
     _DEGENERATE = _re.compile(r'^[nm]:(\s+AND\s+[nm]:)*$')
@@ -261,9 +262,13 @@ try:
             if _orig is not None:
                 setattr(_m, _fn, _wrap_label_filter(_orig))
                 _patched.append(f'{_name.rsplit(".", 2)[-2]}.{_fn[:4]}')
-    logger.info(f'Patched label disjunction in {len(_patched)} site(s): {", ".join(_patched)}')
+    # NB: this block runs long before `logger` is defined (line ~435), so it must not
+    # use it -- and the except handler must not either, or the guard re-raises.
+    print(f'[graphiti-mcp] patched label disjunction in {len(_patched)} site(s): '
+          f'{", ".join(_patched)}', file=_sys.stderr)
 except Exception as _e:  # never let the patch break startup
-    logger.warning(f'Could not patch label disjunction: {_e}')
+    import sys as _sys2
+    print(f'[graphiti-mcp] could not patch label disjunction: {_e}', file=_sys2.stderr)
 
 
 try:
