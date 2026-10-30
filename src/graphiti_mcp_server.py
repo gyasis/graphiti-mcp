@@ -932,17 +932,30 @@ async def add_memory(
                 logger.warning(f"Unknown source type '{source}', using 'text' as default")
                 episode_type = EpisodeType.text
 
-        # Sanitize episode_body and source_description to prevent RediSearch indexing errors
-        # Characters like ~, @, :, /, - can cause "Syntax error at offset X" during
-        # FalkorDB's automatic fulltext indexing of the content field
-        # Note: 'content', 'source', 'source_description', 'group_id' are all indexed
-        # FIX: Skip sanitization for JSON source type — sanitize_for_redisearch strips
-        # structural characters ({, }, [, ], :, ", ,) that JSON needs to remain valid
-        if episode_type == EpisodeType.json:
-            sanitized_body = episode_body
-        else:
-            sanitized_body = sanitize_for_redisearch(episode_body)
-        sanitized_source_desc = sanitize_for_redisearch(source_description)
+        # Store the body VERBATIM. Do NOT sanitize it.
+        #
+        # This used to run every non-JSON body through sanitize_for_redisearch(), which
+        # replaces . / ~ - : ( ) and 25 more characters with spaces, to avoid a claimed
+        # "RediSearch: Syntax error at offset X" during fulltext indexing. That cost was
+        # catastrophic and silent: an episode is a POINTER, and the whole value of a
+        # pointer is the path it points at. Every path ever written was destroyed on
+        # write -- "~/.claude/rulebook/tools/prd.md" was stored as
+        # "claude rulebook tools prd md", which no agent can open. Measured 2026-10-30:
+        # 0 of 81 stored bodies contained a single . / ~ or -.
+        #
+        # The premise was wrong. Probed directly against this FalkorDB (2026-10-30):
+        # with a fulltext index live on Episodic.content, a body containing
+        # "~/.claude/rulebook/domains/model-dossier.md (R-MD1)" was accepted, stored
+        # byte-identical, and returned by db.idx.fulltext.queryNodes for every term
+        # tested (dossier/model/rulebook/domains) -- identical recall to the stripped
+        # copy. FalkorDB's tokenizer splits on punctuation by itself. The syntax error
+        # belongs to the QUERY path, where graphiti-core's own sanitize() already
+        # escapes, and it was "fixed" here by mutilating the stored data instead.
+        #
+        # sanitize_for_redisearch() is kept for callers that build a QUERY string.
+        # It must never again be applied to content on the way in.
+        sanitized_body = episode_body
+        sanitized_source_desc = source_description
 
         # CRITICAL FIX: Use semaphore to prevent rate limit errors (429)
         # Each episode processing involves multiple LLM calls
