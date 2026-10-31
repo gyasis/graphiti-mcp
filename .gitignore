@@ -30,3 +30,4 @@ deep_research.db
 .memory/
 .specstory/
 *.db
+backups/
