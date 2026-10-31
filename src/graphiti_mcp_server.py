@@ -271,6 +271,75 @@ except Exception as _e:  # never let the patch break startup
     print(f'[graphiti-mcp] could not patch label disjunction: {_e}', file=_sys2.stderr)
 
 
+# --------------------------------------------------------------------------- #
+# PATCH: step OVER phantom Episodic label-index entries (2026-10-31)          #
+#                                                                              #
+# This FalkorDB graph's `Episodic` label matrix lists 25 node ids that the     #
+# datablock no longer holds. They are index corruption, not nodes: a           #
+# `MATCH (n:Episodic)` counts them (119 instead of 94) while `MATCH (n)`       #
+# cannot see them at all, so they cannot be deleted -- and the batch form      #
+# `MATCH (n:Episodic) WHERE size(keys(n))=0 DELETE n` SEGFAULTS the server in  #
+# UndoLog_DeleteNode (reproduced in a throwaway container, never on live).     #
+#                                                                              #
+# Reading any attribute off one raises "Attempted to access undefined          #
+# attribute", and FalkorDB aborts the WHOLE query rather than skipping the     #
+# row. retrieve_episodes() opens with `MATCH (e:Episodic) WHERE e.valid_at     #
+# <= $reference_time`, so get_episodes returned ZERO episodes for any limit    #
+# past ~20 -- the map went dark while the data was entirely fine.              #
+#                                                                              #
+# There is a SECOND class of bad row: 12 nodes carry a uuid and a name but no  #
+# content, valid_at or source -- extraction fragments ("Jev", "API",           #
+# "boolean", "CRED7") that some write path left behind as Episodic nodes. A    #
+# NULL valid_at LEAKS THROUGH `e.valid_at <= $reference_time` here, and        #
+# EpisodicNode then raises "valid_at cannot be None for episode <uuid>",       #
+# which the tool reports as "No episodes found". So the guard also demands     #
+# valid_at and content.                                                        #
+#                                                                              #
+# `size(keys(e)) > 0` is evaluable on a phantom (verified), so it filters      #
+# them out before any attribute is touched. Rewriting the query text mirrors   #
+# the label-disjunction patch above. Idempotent: after the rewrite the         #
+# pattern no longer matches. Detail: ~/.claude/rulebook/domains/graphiti.md    #
+# R-GR2, R-GR6.                                                                #
+# --------------------------------------------------------------------------- #
+try:
+    import re as _re3
+    import sys as _sys3
+
+    from graphiti_core.driver.falkordb_driver import FalkorDriver as _FalkorDriver
+
+    _EPISODIC_SCAN = _re3.compile(
+        r'(MATCH\s*\(\s*e\s*:\s*Episodic\s*\)\s*WHERE\s+)(e\.)', _re3.IGNORECASE
+    )
+
+    def _guard_episodic_scan(q):
+        """Insert a phantom guard into an unconstrained Episodic scan."""
+        if not isinstance(q, str) or 'Episodic' not in q:
+            return q
+        return _EPISODIC_SCAN.sub(
+            r'\1size(keys(e)) > 0 AND e.valid_at IS NOT NULL '
+            r'AND e.content IS NOT NULL AND \2',
+            q,
+        )
+
+    if not getattr(_FalkorDriver.execute_query, '_phantom_guard_patched', False):
+        _orig_execute_query = _FalkorDriver.execute_query
+
+        async def _execute_query_guarded(self, cypher_query_, **kwargs):
+            return await _orig_execute_query(self, _guard_episodic_scan(cypher_query_), **kwargs)
+
+        _execute_query_guarded._phantom_guard_patched = True
+        _execute_query_guarded.__doc__ = (
+            'Patched: skips phantom Episodic label-index entries that would otherwise '
+            'abort the whole query.'
+        )
+        _FalkorDriver.execute_query = _execute_query_guarded
+        print('[graphiti-mcp] patched Episodic phantom guard on FalkorDriver.execute_query',
+              file=_sys3.stderr)
+except Exception as _e3:  # never let the patch break startup
+    import sys as _sys4
+    print(f'[graphiti-mcp] could not patch Episodic phantom guard: {_e3}', file=_sys4.stderr)
+
+
 try:
     import graphiti_core.utils.maintenance.node_operations as _node_ops
 
