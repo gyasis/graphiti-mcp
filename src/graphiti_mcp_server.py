@@ -272,34 +272,30 @@ except Exception as _e:  # never let the patch break startup
 
 
 # --------------------------------------------------------------------------- #
-# PATCH: step OVER phantom Episodic label-index entries (2026-10-31)          #
+# PATCH: step OVER phantom Episodic label-index entries                       #
 #                                                                              #
-# This FalkorDB graph's `Episodic` label matrix lists 25 node ids that the     #
-# datablock no longer holds. They are index corruption, not nodes: a           #
-# `MATCH (n:Episodic)` counts them (119 instead of 94) while `MATCH (n)`       #
-# cannot see them at all, so they cannot be deleted -- and the batch form      #
-# `MATCH (n:Episodic) WHERE size(keys(n))=0 DELETE n` SEGFAULTS the server in  #
-# UndoLog_DeleteNode (reproduced in a throwaway container, never on live).     #
+# This graph's `Episodic` label matrix lists node ids the datablock does not   #
+# hold. They are index corruption, not nodes: `MATCH (n:Episodic)` counts      #
+# them, `MATCH (n)` cannot see them, and nothing can delete them -- the batch  #
+# form `MATCH (n:Episodic) WHERE size(keys(n))=0 DELETE n` segfaults the       #
+# server in UndoLog_DeleteNode.                                                #
 #                                                                              #
-# Reading any attribute off one raises "Attempted to access undefined          #
-# attribute", and FalkorDB aborts the WHOLE query rather than skipping the     #
-# row. retrieve_episodes() opens with `MATCH (e:Episodic) WHERE e.valid_at     #
-# <= $reference_time`, so get_episodes returned ZERO episodes for any limit    #
-# past ~20 -- the map went dark while the data was entirely fine.              #
+# Reading an attribute off a phantom raises "Attempted to access undefined     #
+# attribute", and FalkorDB aborts the whole query instead of skipping the row. #
+# retrieve_episodes() opens with `MATCH (e:Episodic) WHERE e.valid_at <=       #
+# $reference_time`, so one phantom empties the result for every caller.        #
 #                                                                              #
-# There is a SECOND class of bad row: 12 nodes carry a uuid and a name but no  #
-# content, valid_at or source -- extraction fragments ("Jev", "API",           #
-# "boolean", "CRED7") that some write path left behind as Episodic nodes. A    #
-# NULL valid_at LEAKS THROUGH `e.valid_at <= $reference_time` here, and        #
-# EpisodicNode then raises "valid_at cannot be None for episode <uuid>",       #
-# which the tool reports as "No episodes found". So the guard also demands     #
-# valid_at and content.                                                        #
+# A second class of bad row carries a uuid and a name but no content,          #
+# valid_at or source. A NULL valid_at passes `e.valid_at <= $reference_time`,  #
+# and EpisodicNode then raises "valid_at cannot be None for episode <uuid>",   #
+# which the tool reports as "No episodes found". The guard therefore demands   #
+# valid_at and content as well.                                                #
 #                                                                              #
-# `size(keys(e)) > 0` is evaluable on a phantom (verified), so it filters      #
-# them out before any attribute is touched. Rewriting the query text mirrors   #
-# the label-disjunction patch above. Idempotent: after the rewrite the         #
-# pattern no longer matches. Detail: ~/.claude/rulebook/domains/graphiti.md    #
-# R-GR2, R-GR6.                                                                #
+# `size(keys(e)) > 0` evaluates on a phantom, so it filters one out before     #
+# any attribute is touched. Rewriting the query text mirrors the               #
+# label-disjunction patch above. Idempotent: after the rewrite the pattern no  #
+# longer matches. Detail: ~/.claude/rulebook/domains/graphiti.md R-GR2,        #
+# R-GR6.                                                                       #
 # --------------------------------------------------------------------------- #
 try:
     import re as _re3
@@ -1003,26 +999,21 @@ async def add_memory(
 
         # Store the body VERBATIM. Do NOT sanitize it.
         #
-        # This used to run every non-JSON body through sanitize_for_redisearch(), which
-        # replaces . / ~ - : ( ) and 25 more characters with spaces, to avoid a claimed
-        # "RediSearch: Syntax error at offset X" during fulltext indexing. That cost was
-        # catastrophic and silent: an episode is a POINTER, and the whole value of a
-        # pointer is the path it points at. Every path ever written was destroyed on
-        # write -- "~/.claude/rulebook/tools/prd.md" was stored as
-        # "claude rulebook tools prd md", which no agent can open. Measured 2026-10-30:
-        # 0 of 81 stored bodies contained a single . / ~ or -.
+        # sanitize_for_redisearch() replaces . / ~ - : ( ) and 25 more characters
+        # with spaces. An episode is a POINTER, and its whole value is the path it
+        # carries, so running a body through it stores "claude rulebook tools prd md"
+        # where the caller wrote "~/.claude/rulebook/tools/prd.md" -- an address no
+        # agent can open.
         #
-        # The premise was wrong. Probed directly against this FalkorDB (2026-10-30):
-        # with a fulltext index live on Episodic.content, a body containing
-        # "~/.claude/rulebook/domains/model-dossier.md (R-MD1)" was accepted, stored
-        # byte-identical, and returned by db.idx.fulltext.queryNodes for every term
-        # tested (dossier/model/rulebook/domains) -- identical recall to the stripped
-        # copy. FalkorDB's tokenizer splits on punctuation by itself. The syntax error
-        # belongs to the QUERY path, where graphiti-core's own sanitize() already
-        # escapes, and it was "fixed" here by mutilating the stored data instead.
+        # Punctuation in content is safe to store. FalkorDB's fulltext tokenizer
+        # splits on punctuation itself, so a body holding a full path indexes and
+        # recalls identically to a stripped copy. "RediSearch: Syntax error at
+        # offset X" belongs to the QUERY path, where graphiti-core's own sanitize()
+        # escapes the search string.
         #
-        # sanitize_for_redisearch() is kept for callers that build a QUERY string.
-        # It must never again be applied to content on the way in.
+        # sanitize_for_redisearch() stays for callers that build a QUERY string.
+        # Never apply it to content on the way in. See
+        # ~/.claude/rulebook/domains/graphiti.md R-GR4.
         sanitized_body = episode_body
         sanitized_source_desc = source_description
 
